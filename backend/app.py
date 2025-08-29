@@ -1,84 +1,138 @@
 import io
-# Side Note: io provides Python's main facilities for dealing with various types of I/O
-# BytesIO creates an in-memory bytes buffer (like a file in RAM)
-
 from datetime import datetime
-# Side Note: datetime is used to add timestamps to generated files
-
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import pandas as pd
+import yfinance as yf
 
 app = Flask(__name__)
-# Side Note: Creates the Flask application instance
+CORS(app)
 
-CORS(app)  # Enable CORS for React frontend
-# Side Note: Applies CORS to all routes, allowing the React app to make requests
-
-@app.route('/api/generate-csv', methods=['POST'])
-# Side Note: @app.route is a decorator that maps the URL path to this function
-# '/api/generate-csv' is the endpoint URL
-# methods=['POST'] means this endpoint only accepts POST requests
-def generate_csv():
+@app.route('/api/debt-to-equity', methods=['POST'])
+def calculate_debt_to_equity():
     try:
-        # Get data from request
         data = request.json
-        # Side Note: request.json automatically parses JSON data sent from React
+        ticker = data.get('ticker')
         
-        # Example: Generate CSV based on received data
-        # You can customize this based on your needs
-        if data and 'rows' in data:
-            # Create DataFrame from received data
-            df = pd.DataFrame(data['rows'])
-            # Side Note: pd.DataFrame() creates a table-like structure from the data
-            # data['rows'] accesses the 'rows' key from the JSON sent by React
-        else:
-            # Generate sample data if none provided
-            df = pd.DataFrame({
-                'ID': range(1, 11),  # Creates numbers 1-10
-                'Name': [f'Item {i}' for i in range(1, 11)],  # f-strings format strings with variables
-                'Value': [i * 10 for i in range(1, 11)],  # List comprehension creates [10,20,30...]
-                'Date': [datetime.now().strftime('%Y-%m-%d')] * 10  # Current date repeated 10 times
-            })
+        if not ticker:
+            return jsonify({'error': 'Ticker is required'}), 400
+        
+        # Create ticker object
+        tckr = yf.Ticker(ticker)
+        
+        # Get annual balance sheet data
+        balance_sheet = tckr.balance_sheet
+        
+        if balance_sheet.empty:
+            return jsonify({'error': f'No balance sheet data found for {ticker}'}), 404
+        
+        data_list = []
+        
+        # Calculate debt-to-equity ratio for each year
+        for date in balance_sheet.columns:
+            year = date.strftime('%Y')
+            
+            # Get debt components
+            long_term_debt = balance_sheet.loc['Long Term Debt', date] if 'Long Term Debt' in balance_sheet.index else 0
+            short_term_debt = balance_sheet.loc['Current Debt', date] if 'Current Debt' in balance_sheet.index else 0
+            
+            # Calculate total debt
+            total_debt = (long_term_debt if pd.notna(long_term_debt) else 0) + (short_term_debt if pd.notna(short_term_debt) else 0)
+            
+            # Get total equity - try different possible field names
+            equity_fields = ['Total Stockholder Equity', 'Stockholders Equity', 'Total Equity', 'Shareholders Equity']
+            total_equity = None
+            
+            for field in equity_fields:
+                if field in balance_sheet.index:
+                    total_equity = balance_sheet.loc[field, date]
+                    break
+            
+            # Calculate debt-to-equity ratio
+            if pd.notna(total_equity) and total_equity != 0:
+                debt_to_equity = total_debt / total_equity
+                data_list.append({
+                    'year': year,
+                    'debt_to_equity': round(debt_to_equity, 2),
+                    'stock': ticker
+                })
+        
+        return jsonify({'data': data_list})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/debt-to-equity-csv', methods=['POST'])
+def generate_debt_to_equity_csv():
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        
+        if not ticker:
+            return jsonify({'error': 'Ticker is required'}), 400
+        
+        # Create ticker object
+        tckr = yf.Ticker(ticker)
+        
+        # Get annual balance sheet data
+        balance_sheet = tckr.balance_sheet
+        
+        if balance_sheet.empty:
+            return jsonify({'error': f'No balance sheet data found for {ticker}'}), 404
+        
+        data_list = []
+        
+        # Calculate debt-to-equity ratio for each year
+        for date in balance_sheet.columns:
+            year = date.strftime('%Y')
+            
+            # Get debt components
+            long_term_debt = balance_sheet.loc['Long Term Debt', date] if 'Long Term Debt' in balance_sheet.index else 0
+            short_term_debt = balance_sheet.loc['Current Debt', date] if 'Current Debt' in balance_sheet.index else 0
+            
+            # Calculate total debt
+            total_debt = (long_term_debt if pd.notna(long_term_debt) else 0) + (short_term_debt if pd.notna(short_term_debt) else 0)
+            
+            # Get total equity - try different possible field names
+            equity_fields = ['Total Stockholder Equity', 'Stockholders Equity', 'Total Equity', 'Shareholders Equity']
+            total_equity = None
+            
+            for field in equity_fields:
+                if field in balance_sheet.index:
+                    total_equity = balance_sheet.loc[field, date]
+                    break
+            
+            # Calculate debt-to-equity ratio
+            if pd.notna(total_equity) and total_equity != 0:
+                debt_to_equity = total_debt / total_equity
+                data_list.append({
+                    'year': year,
+                    'debt_to_equity': round(debt_to_equity, 2),
+                    'stock': ticker
+                })
+        
+        # Create DataFrame and CSV
+        df = pd.DataFrame(data_list)
         
         # Create a BytesIO object to hold the CSV data
         output = io.BytesIO()
-        # Side Note: BytesIO creates a file-like object in memory (not on disk)
-        
         df.to_csv(output, index=False)
-        # Side Note: to_csv() converts DataFrame to CSV format
-        # index=False prevents row numbers from being included in the CSV
-        
         output.seek(0)
-        # Side Note: seek(0) moves the "cursor" back to the beginning of the file
-        # Like rewinding a tape before playing it
         
         # Send the CSV file
         return send_file(
             io.BytesIO(output.getvalue()),
-            # Side Note: output.getvalue() gets all the bytes from the buffer
-            # We create a new BytesIO to ensure proper file handling
-            
             mimetype='text/csv',
-            # Side Note: MIME type tells the browser this is a CSV file
-            
             as_attachment=True,
-            # Side Note: Forces download rather than displaying in browser
-            
-            download_name=f'generated_data_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-            # Side Note: Sets the filename with timestamp (e.g., generated_data_20240315_143022.csv)
+            download_name=f'debt_to_equity_{ticker}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
         )
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-        # Side Note: Catches any errors and returns them as JSON
-        # 500 is the HTTP status code for "Internal Server Error"
 
 @app.route('/api/health', methods=['GET'])
-# Side Note: A simple endpoint to check if the server is running
 def health_check():
     return jsonify({'status': 'healthy'})
-    # Side Note: Returns JSON confirming the server is working
 
 if __name__ == '__main__':
     # Side Note: This condition ensures the code below only runs when the script is executed directly
