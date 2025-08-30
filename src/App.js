@@ -66,11 +66,45 @@ function App() {
     }
   };
 
+  const handleDownloadCashFlowCSV = async () => {
+    if (!ticker.trim()) {
+      setError('Please enter a ticker symbol');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await axios({
+        method: 'POST',
+        url: 'http://localhost:5000/api/cash-flow-csv',
+        responseType: 'blob',
+        data: {
+          ticker: ticker.toUpperCase()
+        }
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `cash_flow_${ticker.toUpperCase()}_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to download cash flow CSV');
+      console.error('Error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="App">
       <header className="App-header">
-        <h1>Debt-to-Equity Ratio Calculator</h1>
+        <h1>Key Metrics</h1>
         
         <div className="input-section">
           <label htmlFor="ticker">Stock Ticker Symbol:</label>
@@ -85,22 +119,36 @@ function App() {
         </div>
 
         <div className="button-section">
-          <button 
-            onClick={handleCalculateDebtToEquity} 
-            disabled={loading || !ticker.trim()}
-            className="calculate-btn"
-          >
-            {loading ? 'Calculating...' : 'Calculate Debt-to-Equity'}
-          </button>
+          
 
           <button 
             onClick={handleDownloadCSV} 
             disabled={loading || !ticker.trim()}
             className="download-btn"
           >
-            {loading ? 'Generating...' : 'Download CSV'}
+            {loading ? 'Generating...' : 'Download Debt-to-Equity CSV'}
           </button>
         </div>
+
+        <div className="input-section">
+          <label htmlFor="ticker">Stock Ticker Symbol:</label>
+          <input
+            id="ticker"
+            type="text"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value)}
+            placeholder="e.g., AAPL, MSFT, GOOGL"
+            disabled={loading}
+          />
+        </div>
+
+          <button 
+            onClick={handleDownloadCashFlowCSV} 
+            disabled={loading || !ticker.trim()}
+            className="download-btn"
+          >
+            {loading ? 'Generating...' : 'Download Cash Flow CSV'}
+          </button>
 
         {error && <p className="error">{error}</p>}
 

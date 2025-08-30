@@ -130,6 +130,102 @@ def generate_debt_to_equity_csv():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/cash-flow-csv', methods=['POST'])
+def generate_cash_flow_csv(fcf_method="conservative"):
+    try:
+        data = request.json
+        ticker = data.get('ticker')
+        
+        if not ticker:
+            return jsonify({'error': 'Ticker is required'}), 400
+        
+        # Create ticker object
+        tckr = yf.Ticker(ticker)
+        
+        # Get cash flow statement (annual data)
+        cashflow = tckr.cashflow
+
+        if cashflow.empty:
+            return jsonify({'error': f'No cash flow data found for {ticker}'}), 404
+
+        data_list = []
+        
+        # Process each year's data
+        for column in cashflow.columns:
+            year = column.year
+            
+            # Extract key cash flow metrics
+            operating_cf = cashflow.loc['Operating Cash Flow', column] if 'Operating Cash Flow' in cashflow.index else 0
+            investing_cf = cashflow.loc['Investing Cash Flow', column] if 'Investing Cash Flow' in cashflow.index else 0
+            financing_cf = cashflow.loc['Financing Cash Flow', column] if 'Financing Cash Flow' in cashflow.index else 0
+            
+            # Calculate free cash flow (Operating CF - Capital Expenditures)
+            capex = cashflow.loc['Capital Expenditures', column] if 'Capital Expenditures' in cashflow.index else 0
+            
+            # Calculate free cash flow with fallback logic for positive CAPEX
+            capex = cashflow.loc['Capital Expenditures', column] if 'Capital Expenditures' in cashflow.index else 0
+
+            # Apply different methods based on user preference
+            if fcf_method == "conservative":
+                if capex >= 0:  # Positive CAPEX (asset sales)
+                    free_cashflow = operating_cf  # Exclude one-time gains
+                    fcf_note = "excluding asset sales"
+                else:  # Negative CAPEX (normal spending)
+                    free_cashflow = operating_cf + capex
+                    fcf_note = "standard calculation"
+                    
+            elif fcf_method == "inclusive":
+                free_cashflow = operating_cf + capex  # Include everything
+                fcf_note = "including all CAPEX"
+                
+            elif fcf_method == "hybrid":
+                if capex >= 0:
+                    free_cashflow = operating_cf + capex  # Include but flag it
+                    fcf_note = f"includes +${capex/1e6:.0f}M asset sales"
+                else:
+                    free_cashflow = operating_cf + capex
+                    fcf_note = "standard calculation"
+            
+            else:
+                # Default fallback
+                free_cashflow = operating_cf + capex
+                fcf_note = "standard calculation"
+            
+            # Net change in cash
+            net_change = operating_cf + investing_cf + financing_cf
+            
+            # Add to data list for CSV
+            data_list.append({
+                'year': year,
+                'stock': ticker,
+                'operating_cash_flow': operating_cf,
+                'investing_cash_flow': investing_cf,
+                'financing_cash_flow': financing_cf,
+                'free_cash_flow': free_cashflow,
+                'fcf_calculation': fcf_note,
+                'capex': capex,
+                'net_change_in_cash': net_change
+            })
+            
+        # Create DataFrame and CSV
+        df = pd.DataFrame(data_list)
+        
+        # Create a BytesIO object to hold the CSV data
+        output = io.BytesIO()
+        df.to_csv(output, index=False)
+        output.seek(0)
+        
+        # Send the CSV file
+        return send_file(
+            io.BytesIO(output.getvalue()),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'cash_flow_{ticker}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        )
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'healthy'})
